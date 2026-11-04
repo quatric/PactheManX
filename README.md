@@ -47,7 +47,7 @@ your SD card. `make NO_DOLXZ=1` skips the compression.
 - **Join a game**: the other player presses A, 1 or 2 (Return on a keyboard).
 - **Pause**: + or START (Space).
 - **Back to the title**: − or HOME (Esc).
-- **Title screen**: point and press A, or use the D-pad and A. HOME opens the preferences.
+- **Title screen**: point and press A, or use the D-pad and A. HOME (X on the 3DS, Wii U and Switch) opens the preferences, and B asks to exit to the Wii Menu (to quit on the other systems).
 
 You enter high score names with the Wii keyboard.
 

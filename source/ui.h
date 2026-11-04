@@ -17,6 +17,7 @@ void ui_update(void);           /* input for the open panel; also opens the pane
 void ui_draw(void);
 
 void ui_open_prefs(void);
+void ui_request_quit(void);     /* asks, then leaves the game (the Wii Menu on the Wii) */
 void ui_alert(const char *text);
 void ui_confirm(const char *title, const char *text, void (*yes)(void));
 

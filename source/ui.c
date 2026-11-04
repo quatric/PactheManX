@@ -712,6 +712,16 @@ static void prefs_activate(int i) {
     }
 }
 
+static void do_quit(void) { quitRequested = 1; }
+
+void ui_request_quit(void) {
+#ifdef PACX_PORT
+    ui_confirm("QUIT", "Quit Pac the Man X?", do_quit);
+#else
+    ui_confirm("EXIT", "Exit to the Wii Menu?", do_quit);
+#endif
+}
+
 void ui_open_prefs(void) {
     UiMenu m = {0};
     m.title = "PREFERENCES";

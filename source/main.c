@@ -63,6 +63,10 @@ static void splash_input(void) {
         ui_open_prefs();
         return;
     }
+    if (pr & MB_BACK) {
+        ui_request_quit();
+        return;
+    }
     if (rep & (MB_LEFT | MB_RIGHT | MB_UP | MB_DOWN)) {
         if (splashSel < 0) splashSel = 0;
         else if (rep & (MB_LEFT | MB_UP)) splashSel = (splashSel + 5) % 6;
@@ -114,6 +118,15 @@ static void draw_splash_selection(void) {
     if (game.mode != MODE_SPLASH || splashSel < 0) return;
     Sprite *b = splash_button(splashSel);
     if (b) gfx_frame(b->x - 2, b->y - 2, 52, 52, 2, 1, 1, 0.4f, 0.9f);
+}
+
+static void draw_splash_hint(void) {
+    if (game.mode != MODE_SPLASH) return;
+#ifdef PACX_PORT
+    ui_text_center(VIEW_H - 16, "X: PREFERENCES   B: QUIT", 3, 1, 0.8f);
+#else
+    ui_text_center(VIEW_H - 16, "HOME: PREFERENCES   B: EXIT", 3, 1, 0.8f);
+#endif
 }
 
 #ifdef PACX_TEST
@@ -274,6 +287,7 @@ int main(int argc, char **argv) {
             gfx_rect(0, 0, VIEW_W, VIEW_H, 0, 0, 0, 1);
             eng_draw();
             draw_splash_selection();
+            draw_splash_hint();
         }
         ui_draw();
         float x, y;
