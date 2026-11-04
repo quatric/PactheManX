@@ -302,6 +302,7 @@ int main(int argc, char **argv) {
     port_shutdown();
 #else
     if (powerPressed) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+    SYS_ResetSystem(SYS_RETURNTOMENU, 0, 0);    /* the menu's exit item, or the console's reset button */
 #endif
     return 0;
 }

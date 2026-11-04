@@ -577,7 +577,13 @@ static int nLevelFiles;
 static const char *prefs_label(int i) {
     static const char *l[P_COUNT] = {"DIFFICULTY", "MUSIC", "SOUND", "LEVELS", "SCREEN", "TRY LEVEL",
                                      "TRY WITH", "START TRY LEVEL", "LEVEL EDITOR", "CLEAR HIGHSCORES",
-                                     "DONE", "QUIT"};
+                                     "DONE",
+#ifdef PACX_PORT
+                                     "QUIT"
+#else
+                                     "EXIT TO WII MENU"
+#endif
+                                     };
     return l[i];
 }
 
