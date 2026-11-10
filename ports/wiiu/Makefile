@@ -28,18 +28,21 @@ SRC_GAME	:=	actors engine game levels plist pack settings editor edit_rules ui m
 MACHDEP		:=	-DESPRESSO -mcpu=750 -meabi -mhard-float
 CFLAGS		:=	-g -O2 -Wall -ffp-contract=off -ffunction-sections $(MACHDEP) -D__WIIU__ -D__WUT__ \
 				-DPACX_PORT -DPACX_SDL -I$(ROOT)/source -I$(ROOT)/ports/common \
-				-I$(PORTLIBS)/include -I$(PORTLIBS)/include/SDL2 -I$(WUT)/include -I$(DEVKITPRO)/portlibs/ppc/include
+				-I$(ROOT)/libwiiuinput/include -I$(PORTLIBS)/include -I$(PORTLIBS)/include/SDL2 -I$(WUT)/include -I$(DEVKITPRO)/portlibs/ppc/include
 LDFLAGS		:=	-g $(MACHDEP) -specs=$(WUT)/share/wut.specs -Wl,-Map,$(BUILD)/$(TARGET).map \
-				-L$(PORTLIBS)/lib -L$(WUT)/lib -L$(DEVKITPRO)/portlibs/ppc/lib
-LIBS		:=	-lSDL2main -lSDL2 -lwut -lm
+				-L$(ROOT)/libwiiuinput/lib -L$(PORTLIBS)/lib -L$(WUT)/lib -L$(DEVKITPRO)/portlibs/ppc/lib
+LIBS		:=	-linput-wiiu -lSDL2main -lSDL2 -lwut -lm
 
 OBJS		:=	$(SRC_GAME:%=$(BUILD)/%.o) $(BUILD)/port_sdl.o $(BUILD)/audio_soft.o $(BUILD)/util.o
 
-.PHONY: all clean
+.PHONY: all clean libwiiuinput
 all: $(BUILD)/$(TARGET).wuhb
 	@cp $< $(ROOT)/$(TARGET).wuhb
 	@cp $(BUILD)/$(TARGET).rpx $(ROOT)/$(TARGET).rpx
 	@echo built $(TARGET).wuhb
+
+libwiiuinput:
+	@$(MAKE) --no-print-directory -C $(ROOT)/libwiiuinput
 
 $(BUILD)/%.o: $(ROOT)/source/%.c
 	@mkdir -p $(BUILD)
@@ -58,7 +61,7 @@ $(BUILD)/audio_soft.o: $(ROOT)/ports/common/audio_soft.c
 	@echo $(notdir $<)
 	@$(CC) $(CFLAGS) -Wno-unused-function -MMD -c $< -o $@
 
-$(BUILD)/$(TARGET).elf: $(OBJS)
+$(BUILD)/$(TARGET).elf: $(OBJS) | libwiiuinput
 	@echo linking ... $(notdir $@)
 	@$(CC) $(LDFLAGS) $^ $(LIBS) -o $@
 

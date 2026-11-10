@@ -15,6 +15,8 @@
 #include <switch.h>
 #elif defined(__WIIU__)
 #include <whb/sdcard.h>
+#include <vpad/input.h>
+#include <input_wiiu.h>
 #endif
 #include "gfx.h"
 #include "pack.h"
@@ -72,6 +74,9 @@ void port_fatal(const char *message) {
 void port_shutdown(void) {
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
+#ifdef __WIIU__
+    INPUT_Shutdown();
+#endif
     SDL_Quit();
 #if defined(__SWITCH__)
     romfsExit();
@@ -134,8 +139,13 @@ void port_init(void) {
     desktop_dirs();
 #endif
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+#ifdef __WIIU__
+    /* libwiiuinput reads the controllers, so SDL's joystick layer stays off */
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) != 0) exit(1);
+#else
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) exit(1);
+#endif
 }
 
 /* ================================================================== screen */
@@ -379,7 +389,18 @@ void port_audio_open(void) {
 /* ================================================================== input */
 
 #define MAX_PADS 4
+#ifdef __WIIU__
+/* every controller libwiiuinput sees, one per slot; the first two are the players */
+typedef const input_device *PadRef;
+static input_device wdev[MAX_PADS];
+static PadRef pads[MAX_PADS];
+static u8 kb[256]; /* held USB keys, by HID usage code (the same numbers as SDL scancodes) */
+#define KBSTATE() kb
+#else
+typedef SDL_GameController *PadRef;
 static SDL_GameController *pads[MAX_PADS];
+#define KBSTATE() SDL_GetKeyboardState(NULL)
+#endif
 static u8 held[KEY_COUNT], prev[KEY_COUNT];
 static u32 menuHeld, menuPrev, menuPressed, menuRepeat;
 static int repeatTimer, anyPressed;
@@ -394,13 +415,18 @@ static int shiftHeld;
 enum { X_JOIN = 16, X_PAUSE = 32, X_CANCEL = 64 };
 
 void in_init(void) {
+#ifdef __WIIU__
+    INPUT_Init();
+#else
     SDL_StartTextInput();
+#endif
 }
 
 static void text_push(char c) {
     if (textN < (int)sizeof textQ) textQ[textN++] = c;
 }
 
+#ifndef __WIIU__
 static void open_pad(int index) {
     if (!SDL_IsGameController(index)) return;
     for (int i = 0; i < MAX_PADS; i++)
@@ -415,6 +441,8 @@ static void close_pad(SDL_JoystickID id) {
         }
 }
 
+#endif
+
 static u32 stick_dir(float x, float y) {
     float mag = sqrtf(x * x + y * y);
     if (mag < 0.45f) return 0;
@@ -422,6 +450,80 @@ static u32 stick_dir(float x, float y) {
     return y < 0 ? 4 : 8;
 }
 
+#ifdef __WIIU__
+/* Buttons that libwiiuinput folds together (+ with R, - with L) are read from the device's own bits */
+static int w_classic(PadRef d) { return d->kind == INPUT_DEV_WIIMOTE && d->raw_ext && d->name && d->name[0] == 'C'; }
+static int w_start(PadRef d) {
+    switch (d->kind) {
+    case INPUT_DEV_GAMEPAD: return (d->raw & VPAD_BUTTON_PLUS) != 0;
+    case INPUT_DEV_PRO: return (d->raw & WPAD_PRO_BUTTON_PLUS) != 0;
+    case INPUT_DEV_USBPAD: case INPUT_DEV_GCADAPTER: return (d->raw & INPUT_GC_START) != 0;
+    case INPUT_DEV_WIIMOTE:
+        if (w_classic(d)) return (d->raw_ext & WPAD_CLASSIC_BUTTON_PLUS) != 0;
+        return (d->raw & WPAD_BUTTON_PLUS) != 0;
+    default: return (d->held & WPAD_BUTTON_PLUS) != 0;
+    }
+}
+static int w_back(PadRef d) {
+    switch (d->kind) {
+    case INPUT_DEV_GAMEPAD: return (d->raw & VPAD_BUTTON_MINUS) != 0;
+    case INPUT_DEV_PRO: return (d->raw & WPAD_PRO_BUTTON_MINUS) != 0;
+    case INPUT_DEV_USBPAD: case INPUT_DEV_GCADAPTER: return (d->raw & INPUT_GC_Z) != 0;
+    case INPUT_DEV_WIIMOTE:
+        if (w_classic(d)) return (d->raw_ext & WPAD_CLASSIC_BUTTON_MINUS) != 0;
+        return (d->raw & WPAD_BUTTON_MINUS) != 0;
+    default: return (d->held & WPAD_BUTTON_MINUS) != 0;
+    }
+}
+static int w_shoulder(PadRef d) {
+    switch (d->kind) {
+    case INPUT_DEV_GAMEPAD: return (d->raw & (VPAD_BUTTON_L | VPAD_BUTTON_R | VPAD_BUTTON_ZL | VPAD_BUTTON_ZR)) != 0;
+    case INPUT_DEV_PRO:
+        return (d->raw & (WPAD_PRO_BUTTON_L | WPAD_PRO_BUTTON_R | WPAD_PRO_BUTTON_ZL | WPAD_PRO_BUTTON_ZR)) != 0;
+    case INPUT_DEV_USBPAD: case INPUT_DEV_GCADAPTER: return (d->raw & (INPUT_GC_L | INPUT_GC_R)) != 0;
+    case INPUT_DEV_WIIMOTE:
+        return w_classic(d) &&
+               (d->raw_ext & (WPAD_CLASSIC_BUTTON_L | WPAD_CLASSIC_BUTTON_R | WPAD_CLASSIC_BUTTON_ZL | WPAD_CLASSIC_BUTTON_ZR));
+    default: return 0;
+    }
+}
+
+/* 1 left, 2 right, 4 up, 8 down, X_JOIN, X_PAUSE, X_CANCEL of one controller */
+static u32 pad_bits(PadRef d) {
+    u32 bits = 0;
+    if (!d) return 0;
+    if (d->held & WPAD_BUTTON_LEFT) bits |= 1;
+    if (d->held & WPAD_BUTTON_RIGHT) bits |= 2;
+    if (d->held & WPAD_BUTTON_UP) bits |= 4;
+    if (d->held & WPAD_BUTTON_DOWN) bits |= 8;
+    if (!(bits & 15)) bits |= stick_dir(d->lx, -d->ly);
+    if (d->held & (WPAD_BUTTON_A | WPAD_BUTTON_B)) bits |= X_JOIN;
+    if (w_start(d)) bits |= X_PAUSE;
+    if (w_back(d)) bits |= X_CANCEL;
+    return bits;
+}
+
+static u32 pad_menu(PadRef d) {
+    u32 m = 0;
+    if (!d) return 0;
+    if (d->held & WPAD_BUTTON_UP) m |= MB_UP;
+    if (d->held & WPAD_BUTTON_DOWN) m |= MB_DOWN;
+    if (d->held & WPAD_BUTTON_LEFT) m |= MB_LEFT;
+    if (d->held & WPAD_BUTTON_RIGHT) m |= MB_RIGHT;
+    if (sqrtf(d->lx * d->lx + d->ly * d->ly) > 0.6f) {
+        if (fabsf(d->lx) > fabsf(d->ly)) m |= d->lx < 0 ? MB_LEFT : MB_RIGHT;
+        else m |= d->ly > 0 ? MB_UP : MB_DOWN;
+    }
+    if (d->held & WPAD_BUTTON_A) m |= MB_OK;
+    if (d->held & WPAD_BUTTON_B) m |= MB_BACK;
+    if (w_start(d)) m |= MB_PLUS;
+    if (w_back(d)) m |= MB_MINUS;
+    if (d->held & WPAD_BUTTON_2) m |= MB_HOME;   /* X */
+    if (d->held & WPAD_BUTTON_1) m |= MB_1;      /* Y */
+    if (w_shoulder(d)) m |= MB_2;
+    return m;
+}
+#else
 static int btn(SDL_GameController *c, SDL_GameControllerButton b) { return SDL_GameControllerGetButton(c, b); }
 static float axis(SDL_GameController *c, SDL_GameControllerAxis a) { return SDL_GameControllerGetAxis(c, a) / 32767.0f; }
 
@@ -463,12 +565,59 @@ static u32 pad_menu(SDL_GameController *c) {
     return m;
 }
 
+#endif
+
 static void pointer_from(float wx, float wy) {
     ptrX = gfx_screen_to_view_x(wx);
     ptrY = (wy - oy) / sy;
     ptrVisible = 1;
 }
 
+#ifdef __WIIU__
+static void pump_events(void) {
+    SDL_Event e;
+    ptrPressed = ptrRightPressed = 0;
+    while (SDL_PollEvent(&e))
+        if (e.type == SDL_QUIT) quitRequested = 1;
+
+    int w, h;
+    SDL_GetRendererOutputSize(renderer, &w, &h);
+    INPUT_SetScreenSize(w, h);
+    INPUT_Update();
+
+    /* the controllers, in the order libwiiuinput lists them: the first two are the players */
+    int n = INPUT_DeviceCount();
+    for (int i = 0; i < MAX_PADS; i++)
+        pads[i] = (i < n && INPUT_DeviceGet(i, &wdev[i])) ? &wdev[i] : NULL;
+
+    /* USB keyboard */
+    for (int c = 0; c < 256; c++) kb[c] = INPUT_KeyHeld((uint8_t)c);
+    input_key_event ke;
+    while (INPUT_KeyPop(&ke)) {
+        if (ke.code == 0x2A) text_push('\b');
+        else if (ke.code == 0x28 || ke.code == 0x58) text_push('\n');
+        else if (ke.code == 0x29) text_push(27);
+        else if (ke.ch >= 32 && ke.ch < 127) text_push(ke.ch);
+    }
+
+    /* The pointer: the GamePad's touch screen, a Wii Remote's IR pointer or a USB mouse. A touch or the
+       left mouse button is a click. */
+    int cx, cy, tx, ty;
+    int touched = INPUT_Touch(&tx, &ty);
+    int mouseLeft = (INPUT_MouseButtonsHeld() & INPUT_MOUSE_LEFT) != 0;
+    int mouseRight = (INPUT_MouseButtonsHeld() & INPUT_MOUSE_RIGHT) != 0;
+    if (INPUT_CursorActive()) {
+        INPUT_CursorPosition(&cx, &cy);
+        pointer_from((float)cx, (float)cy);
+    }
+    if (touched) pointer_from((float)tx, (float)ty);
+    int down = touched || mouseLeft;
+    if (down && !ptrDown) ptrPressed = 1;
+    ptrDown = down;
+    if (mouseRight && !ptrRightDown) ptrRightPressed = 1;
+    ptrRightDown = mouseRight;
+}
+#else
 static void pump_events(void) {
     SDL_Event e;
     ptrPressed = ptrRightPressed = 0;
@@ -509,6 +658,8 @@ static void pump_events(void) {
     }
 }
 
+#endif
+
 void in_update(void) {
     pump_events();
     memcpy(prev, held, sizeof held);
@@ -524,7 +675,7 @@ void in_update(void) {
         if (b[p] & X_PAUSE) held[KEY_PAUSE] = 1;
         if (b[p] & X_CANCEL) held[KEY_CANCEL] = 1;
     }
-    const Uint8 *k = SDL_GetKeyboardState(NULL);
+    const Uint8 *k = KBSTATE();
     if (k[SDL_SCANCODE_LEFT]) held[KEY_LEFT1] = 1;
     if (k[SDL_SCANCODE_RIGHT]) held[KEY_RIGHT1] = 1;
     if (k[SDL_SCANCODE_UP]) held[KEY_UP1] = 1;
@@ -538,9 +689,14 @@ void in_update(void) {
     if (k[SDL_SCANCODE_ESCAPE]) held[KEY_CANCEL] = 1;
     shiftHeld = k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT];
     for (int i = 0; i < MAX_PADS; i++)
+#ifdef __WIIU__
+        if (pads[i] && ((pads[i]->held & WPAD_BUTTON_B) || pads[i]->lt > 0.5f || pads[i]->rt > 0.5f))
+            shiftHeld = 1;
+#else
         if (pads[i] && (btn(pads[i], SDL_CONTROLLER_BUTTON_B) || axis(pads[i], SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 0.5f ||
                         axis(pads[i], SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 0.5f))
             shiftHeld = 1;
+#endif
 
     anyPressed = 0;
     for (int i = 0; i < KEY_COUNT; i++)
@@ -584,7 +740,7 @@ void in_update(void) {
 int in_key(int key) { return held[key]; }
 
 int in_join(int player) {
-    const Uint8 *k = SDL_GetKeyboardState(NULL);
+    const Uint8 *k = KBSTATE();
     if (k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_KP_ENTER]) return 1;
     return player >= 1 && player <= 2 && join[player - 1];
 }
